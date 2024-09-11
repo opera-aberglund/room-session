@@ -8,6 +8,7 @@ use std::io::{Error, ErrorKind, Result};
 
 use conclave_types::{ConnectionToLeader, Knowledge, Term};
 use flood_rs::{ReadOctetStream, WriteOctetStream};
+use conclave_room_session::ConnectionIndex;
 
 use crate::ClientReceiveCommand::RoomInfoType;
 use crate::ServerReceiveCommand::PingCommandType;
@@ -40,50 +41,41 @@ impl PingCommand {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct ClientInfo {
-    pub custom_user_id: u64,
-    pub connection_index: u8,
-}
-
 /// Sent from Server to Client
 #[derive(Debug, PartialEq)]
 pub struct RoomInfoCommand {
     pub term: Term,
-    pub leader_index: u8,
-    pub client_infos: Vec<ClientInfo>,
+    pub leader_index: ConnectionIndex,
+    pub my_index: ConnectionIndex,
+    /// An id or address that can be used to reach out to the leader (via a relay server for instance)
+    pub leader_id: String,
 }
 
 impl RoomInfoCommand {
     pub fn to_octets(&self, stream: &mut dyn WriteOctetStream) -> Result<()> {
         stream.write_u16(self.term.0)?;
-        stream.write_u8(self.client_infos.len() as u8)?;
-        for client_info in self.client_infos.iter() {
-            stream.write_u8(client_info.connection_index)?;
-            stream.write_u64(client_info.custom_user_id)?;
-        }
-        stream.write_u8(self.leader_index)?;
+        stream.write_u16(self.leader_index.0)?;
+        stream.write_u16(self.my_index.0)?;
+        stream.write_u8(self.leader_id.len() as u8)?;
+        stream.write(self.leader_id.as_bytes())?;
 
         Ok(())
     }
 
     pub fn from_cursor(stream: &mut dyn ReadOctetStream) -> Result<Self> {
         let term = Term(stream.read_u16()?);
-        let length = stream.read_u8()? as usize;
-        let slice = &mut vec![ClientInfo {
-            custom_user_id: 0,
-            connection_index: 0,
-        }][..length];
-        for client_info in slice.iter_mut().take(length) {
-            *client_info = ClientInfo {
-                connection_index: stream.read_u8()?,
-                custom_user_id: stream.read_u64()?,
-            }
-        }
+        let leader_index = ConnectionIndex(stream.read_u16()?);
+        let my_index = ConnectionIndex(stream.read_u16()?);
+        let leader_id_length = stream.read_u8()? as usize;
+        let mut leader_id = String::with_capacity(dbg!(leader_id_length));
+
+        stream.read(unsafe {dbg!(leader_id.as_bytes_mut())})?;
+
         Ok(Self {
             term,
-            leader_index: stream.read_u8()?,
-            client_infos: slice.to_vec(),
+            leader_index,
+            my_index,
+            leader_id,
         })
     }
 }
@@ -163,6 +155,7 @@ impl ClientReceiveCommand {
 mod tests {
     use conclave_types::{Knowledge, Term, ConnectionToLeader};
     use flood_rs::{InOctetStream, OutOctetStream};
+    use conclave_room_session::ConnectionIndex;
 
     use crate::ClientReceiveCommand::RoomInfoType;
     use crate::ServerReceiveCommand::PingCommandType;
@@ -225,14 +218,20 @@ mod tests {
 
     #[test]
     fn check_client_receive_message() {
-        const EXPECTED_LEADER_INDEX: u8 = 1;
+        const EXPECTED_LEADER_INDEX: u16 = 1;
+        const EXPECTED_MY_INDEX: u16 = 2;
+        const EXPECTED_LEADER_ID: u8 = 'A' as u8;
 
         let octets = [
             ROOM_INFO_COMMAND_TYPE_ID,
-            0x00,                  // Term
-            0x4A,                  // Term (lower)
-            0x00,                  // Number of client infos that follows
-            EXPECTED_LEADER_INDEX, // Leader index
+            0x00,                        // Term
+            0x4A,                        // Term (lower)
+            0x00,                        // Leader index
+            EXPECTED_LEADER_INDEX as u8, // Leader index (lower)
+            0x00,                        // My index
+            EXPECTED_MY_INDEX as u8,     // My index (lower)
+            0x01,                        // Leader id length
+            EXPECTED_LEADER_ID,          // Leader id
         ];
 
         let mut in_stream = InOctetStream::new(Vec::from(octets));
@@ -243,7 +242,10 @@ mod tests {
             RoomInfoType(room_info) => {
                 println!("received {:?}", &room_info);
                 assert_eq!(room_info.term.0, 0x4A);
-                assert_eq!(room_info.leader_index, EXPECTED_LEADER_INDEX);
+                assert_eq!(room_info.leader_index.0, EXPECTED_LEADER_INDEX);
+                assert_eq!(room_info.my_index.0, EXPECTED_MY_INDEX);
+                assert_eq!(room_info.leader_id.len(), 1);
+                assert_eq!(room_info.leader_id.as_bytes()[0], EXPECTED_LEADER_ID);
             } // _ => assert!(false, "should be room info command"),
         }
     }

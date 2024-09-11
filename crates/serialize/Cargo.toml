@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 flood-rs = "0.0.4"
 conclave-types = { path = "../types/" }
+conclave-room-session = { path = "../session" }

@@ -19,20 +19,21 @@ pub struct NetworkConnection {
     pub room: Room,
 }
 
-pub trait SendDatagram {
-    fn send(&self, stream: &mut dyn WriteOctetStream) -> io::Result<()>;
+pub trait SendDatagram<T> {
+    fn send(&self, stream: &mut dyn WriteOctetStream, context: T) -> io::Result<()>;
 }
 
-impl SendDatagram for Room {
-    fn send(&self, stream: &mut dyn WriteOctetStream) -> io::Result<()> {
+impl SendDatagram<(ConnectionIndex, String)> for Room {
+    fn send(&self, stream: &mut dyn WriteOctetStream, (my_index, leader_id): (ConnectionIndex, String)) -> io::Result<()> {
         let room_info_command = RoomInfoCommand {
             term: self.term,
             leader_index: if let Some(index) = self.leader_index {
-                index.0
+                index
             } else {
-                0xff
-            } as u8,
-            client_infos: vec![],
+                ConnectionIndex::INVALID
+            },
+            my_index,
+            leader_id,
         };
         let client_receive_command = ClientReceiveCommand::RoomInfoType(room_info_command);
         client_receive_command.to_octets(stream)?;
@@ -82,7 +83,7 @@ mod tests {
     use std::time::Instant;
 
     use conclave_room_serialize::PING_COMMAND_TYPE_ID;
-    use conclave_room_session::Room;
+    use conclave_room_session::{ConnectionIndex, Room};
     use flood_rs::{InOctetStream, OutOctetStream};
 
     use crate::{ReceiveDatagram, SendDatagram};
@@ -91,9 +92,9 @@ mod tests {
     fn check_send() {
         let room = Room::new();
         let mut out_stream = OutOctetStream::default();
-        room.send(&mut out_stream).unwrap();
+        room.send(&mut out_stream, (ConnectionIndex(0x0010), "A".to_string())).unwrap();
 
-        assert_eq!(vec![0x2a, 0x00, 0x00, 0x00, 0xff], out_stream.data);
+        assert_eq!(vec![0x2a, 0x00, 0x00, 0xff, 0xff, 0x00, 0x10, 0x01, 'A' as u8], out_stream.data);
     }
 
     #[test]

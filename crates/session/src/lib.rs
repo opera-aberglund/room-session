@@ -46,6 +46,8 @@ impl ConnectionIndex {
     pub fn next(&mut self) {
         self.0 += 1;
     }
+
+    pub const INVALID: Self = Self(0xffff);
 }
 
 #[derive(Debug)]
